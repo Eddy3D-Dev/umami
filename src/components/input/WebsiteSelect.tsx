@@ -31,7 +31,7 @@ export function WebsiteSelect({
   const { user } = useLoginQuery();
   const { data, isLoading } = useUserWebsitesQuery(
     { userId: user?.id, teamId },
-    { search, pageSize: 20, includeTeams },
+    { search, pageSize: 100, includeTeams },
   );
   const listItems: { id: string; name: string }[] = data?.data || [];
 
@@ -79,7 +79,7 @@ export function WebsiteSelect({
       allowSearch={true}
       searchValue={search}
       onSearch={handleSearch}
-      onChange={handleChange}
+      onChange={value => handleChange(value as string)}
       onOpenChange={handleOpenChange}
       renderValue={renderValue}
       buttonProps={{
@@ -91,12 +91,12 @@ export function WebsiteSelect({
           ...buttonProps?.style,
         },
       }}
+      maxHeight={480}
       listProps={{
         ...listProps,
         renderEmptyState:
           listProps?.renderEmptyState || (() => <Empty message={t(messages.noResultsFound)} />),
         style: {
-          maxHeight: 'calc(42vh - 65px)',
           width: 280,
           ...listProps?.style,
         },

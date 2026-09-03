@@ -1,14 +1,78 @@
 import type { Prisma, Website } from '@/generated/prisma/client';
 import { ROLES } from '@/lib/constants';
-import prisma from '@/lib/prisma';
+import prisma, { getSchema } from '@/lib/prisma';
 import redis from '@/lib/redis';
+import { sanitizeSortFilters } from '@/lib/sort';
 import type { QueryFilters } from '@/lib/types';
+import { z } from 'zod';
+
+const WEBSITE_SORT_FIELDS = ['name', 'domain', 'createdAt'] as const;
+
+async function deleteWebsiteDependentData(tx: any, websiteId: string) {
+  await tx.sessionReplaySaved.deleteMany({
+    where: { websiteId },
+  });
+
+  await tx.sessionReplay.deleteMany({
+    where: { websiteId },
+  });
+
+  await tx.heatmapEvent.deleteMany({
+    where: { websiteId },
+  });
+
+  await tx.revenue.deleteMany({
+    where: { websiteId },
+  });
+
+  await tx.eventData.deleteMany({
+    where: { websiteId },
+  });
+
+  // Follow the real EventData -> WebsiteEvent dependency to clean up any legacy rows
+  // whose duplicated websiteId drifted from the parent event row.
+  const schema = getSchema();
+
+  if (schema) {
+    await tx.$executeRawUnsafe(`SET search_path TO "${schema}";`);
+  }
+
+  await tx.$executeRawUnsafe(
+    `
+      delete from event_data
+      using website_event
+      where event_data.website_event_id = website_event.event_id
+        and website_event.website_id = $1
+    `,
+    websiteId,
+  );
+
+  await tx.sessionData.deleteMany({
+    where: { websiteId },
+  });
+
+  await tx.sessionLink.deleteMany({
+    where: { websiteId },
+  });
+
+  await tx.websiteEvent.deleteMany({
+    where: { websiteId },
+  });
+
+  await tx.session.deleteMany({
+    where: { websiteId },
+  });
+}
 
 export async function findWebsite(criteria: Prisma.WebsiteFindUniqueArgs) {
   return prisma.client.website.findUnique(criteria);
 }
 
 export async function getWebsite(websiteId: string) {
+  if (!z.uuid().safeParse(websiteId).success) {
+    return null;
+  }
+
   const website = await findWebsite({
     where: {
       id: websiteId,
@@ -23,7 +87,8 @@ export async function getWebsite(websiteId: string) {
 }
 
 export async function getWebsites(criteria: Prisma.WebsiteFindManyArgs, filters: QueryFilters) {
-  const { search } = filters;
+  const sortFilters = sanitizeSortFilters(filters, WEBSITE_SORT_FIELDS);
+  const { search } = sortFilters;
   const { getSearchParameters, pagedQuery } = prisma;
 
   const where: Prisma.WebsiteWhereInput = {
@@ -37,12 +102,15 @@ export async function getWebsites(criteria: Prisma.WebsiteFindManyArgs, filters:
     deletedAt: null,
   };
 
-  const websites = await pagedQuery('website', { ...criteria, where }, filters);
+  const websites = await pagedQuery('website', { ...criteria, where }, sortFilters);
 
   return attachShareIdToWebsites(websites);
 }
 
-export async function getAllUserWebsitesIncludingTeamOwner(userId: string, filters?: QueryFilters) {
+export async function getAllUserWebsitesIncludingTeamAccess(
+  userId: string,
+  filters?: QueryFilters,
+) {
   return getWebsites(
     {
       where: {
@@ -53,7 +121,7 @@ export async function getAllUserWebsitesIncludingTeamOwner(userId: string, filte
               deletedAt: null,
               members: {
                 some: {
-                  role: ROLES.teamOwner,
+                  role: { in: [ROLES.teamOwner, ROLES.teamManager] },
                   userId,
                 },
               },
@@ -62,10 +130,7 @@ export async function getAllUserWebsitesIncludingTeamOwner(userId: string, filte
         ],
       },
     },
-    {
-      orderBy: 'name',
-      ...filters,
-    },
+    sanitizeSortFilters(filters, WEBSITE_SORT_FIELDS, { orderBy: 'name' }),
   );
 }
 
@@ -84,10 +149,7 @@ export async function getUserWebsites(userId: string, filters?: QueryFilters) {
         },
       },
     },
-    {
-      orderBy: 'name',
-      ...filters,
-    },
+    sanitizeSortFilters(filters, WEBSITE_SORT_FIELDS, { orderBy: 'name' }),
   );
 }
 
@@ -136,33 +198,7 @@ export async function resetWebsite(websiteId: string) {
 
   return transaction(
     async tx => {
-      await tx.sessionReplaySaved.deleteMany({
-        where: { websiteId },
-      });
-
-      await tx.sessionReplay.deleteMany({
-        where: { websiteId },
-      });
-
-      await tx.revenue.deleteMany({
-        where: { websiteId },
-      });
-
-      await tx.eventData.deleteMany({
-        where: { websiteId },
-      });
-
-      await tx.sessionData.deleteMany({
-        where: { websiteId },
-      });
-
-      await tx.websiteEvent.deleteMany({
-        where: { websiteId },
-      });
-
-      await tx.session.deleteMany({
-        where: { websiteId },
-      });
+      await deleteWebsiteDependentData(tx, websiteId);
 
       const website = await tx.website.update({
         where: { id: websiteId },
@@ -191,33 +227,7 @@ export async function deleteWebsite(websiteId: string) {
 
   return transaction(
     async tx => {
-      await tx.sessionReplaySaved.deleteMany({
-        where: { websiteId },
-      });
-
-      await tx.sessionReplay.deleteMany({
-        where: { websiteId },
-      });
-
-      await tx.revenue.deleteMany({
-        where: { websiteId },
-      });
-
-      await tx.eventData.deleteMany({
-        where: { websiteId },
-      });
-
-      await tx.sessionData.deleteMany({
-        where: { websiteId },
-      });
-
-      await tx.websiteEvent.deleteMany({
-        where: { websiteId },
-      });
-
-      await tx.session.deleteMany({
-        where: { websiteId },
-      });
+      await deleteWebsiteDependentData(tx, websiteId);
 
       await tx.report.deleteMany({
         where: { websiteId },
@@ -260,6 +270,15 @@ export async function getWebsiteCount(userId: string) {
   return prisma.client.website.count({
     where: {
       userId,
+      deletedAt: null,
+    },
+  });
+}
+
+export async function getTeamWebsiteCount(teamId: string) {
+  return prisma.client.website.count({
+    where: {
+      teamId,
       deletedAt: null,
     },
   });
