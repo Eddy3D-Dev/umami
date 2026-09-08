@@ -52,3 +52,5 @@ yarn-error.log*
 *.env.*
 
 *.dev.yml
+.vercel
+.env*
