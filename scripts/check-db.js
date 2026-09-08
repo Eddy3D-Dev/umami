@@ -23,7 +23,9 @@ if (process.env.SKIP_DB_CHECK) {
 }
 
 const url = new URL(process.env.DATABASE_URL);
-console.log(`DEBUG: DATABASE_URL is defined. Host is: ${url.host}`);
+// Username is not a secret and distinguishes a malformed pooler user
+// (`postgres`) from a correct one (`postgres.<project-ref>`).
+console.log(`DEBUG: DATABASE_URL is defined. Host is: ${url.host}, user is: ${url.username}`);
 
 const adapter = new PrismaPg(
   { connectionString: url.toString() },
