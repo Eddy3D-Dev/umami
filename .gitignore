@@ -21,8 +21,10 @@ next-env.d.ts
 /build
 /public/script.js
 /public/recorder.js
+/public/openapi.json
 /geo
 /dist
+/packages/*/dist
 /generated
 /src/generated
 pm2.yml
@@ -54,3 +56,6 @@ yarn-error.log*
 *.dev.yml
 .vercel
 .env*
+
+# api integration test runtime state
+/tests/api/.runtime
